@@ -48,7 +48,7 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     };
     const updateWindowTitle = () => {
-        document.title = currentFileName ? `${currentFileName} - Premium Markdown Editor` : 'Premium Markdown Editor';
+        document.title = 'Markdown Viewer';
     };
     const setCurrentDocument = (doc = {}) => {
         input.value = typeof doc.content === 'string' ? doc.content : '';
