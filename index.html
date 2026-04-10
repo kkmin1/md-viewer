@@ -20,7 +20,7 @@
     <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="LatexTable.js"></script>
-    <script src="script.js?v=3"></script>
+    <script src="script.js?v=4"></script>
 
 
 
@@ -65,6 +65,7 @@
 
 ## 특징
 - 마크다운 문법에서 한글 편집시 단어의 굵게 표시 명령(**)바로 뒤에 문자가 **공백**없이 붙을 경우 발생하는 **"오류"**를 해결
+- **`백틱오류`**도 해결
 - 범위 표시 "1개 ~ 2개"와 같은 표현에서 ~를 취소선으로 인식하는 오류 해결
 - svg 형식 이미지 렌더링
 - latex 수식 지원
@@ -171,6 +172,18 @@ function greet() {
 유류 할증료 & 80,000 & 80,000 & 0 \\ \hline
 \color{red}{총 가격} & 580,000 & 230,000 & 70,000 \\ \hline
 \end{tabular}
+
+$$ \begin{tikzpicture}[scale=0.2] \draw[->] (0,0) -- (0,50)
+            node[left]{$F_{\text{\tiny K}}$}; \draw[->] (0,0) -- (50,0)
+            node[below]{$K$}; \draw[thick] (2,48) .. controls (15,15) and (44,3)
+            .. (48,2); \node at (10,40) {$\frac{\partial F}{\partial K}$ 곡선};
+            \node at (18,-2) {$K^{*}$}; \node at (28,-2) {$K^{\text{\tiny'}}$};
+            \node at (-2,22) {$F_{\text{\tiny K}}^{*}$}; \node at (-2,13)
+            {$F_{\text{\tiny K}}^{\text{\tiny'}}$}; \node at (-1,-1) {0};
+            \draw[densely dotted] (18,0) -- (18,22.3); \draw[densely dotted]
+            (28,0) -- (28,13.5); \draw[densely dotted] (0,22.3) -- (18,22.3);
+            \draw[densely dotted] (0,13.5) -- (28,13.5); \end{tikzpicture} $$
+        
 </textarea>
             </section>
 

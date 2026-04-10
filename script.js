@@ -17,6 +17,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const UPMATH = 'https://i.upmath.me/svg/';
     const LATEX_BLOCK_ENV_PATTERN = /\\begin\{(tikzpicture|bmatrix|Bmatrix|pmatrix|vmatrix|Vmatrix|matrix|cases|aligned|align\*?|equation\*?|gather\*?|multline\*?)\}[\s\S]*?\\end\{\1\}/g;
     const latexMetricCache = {};
+    const STRONG_OPEN_MARKER = '@@MD_STRONG_OPEN@@';
+    const STRONG_CLOSE_MARKER = '@@MD_STRONG_CLOSE@@';
+    const EM_OPEN_MARKER = '@@MD_EM_OPEN@@';
+    const EM_CLOSE_MARKER = '@@MD_EM_CLOSE@@';
+    const INLINE_CODE_MARKER_PREFIX = '@@MD_INLINE_CODE_';
 
     marked.setOptions({ breaks: true, gfm: true, silent: true });
 
@@ -185,6 +190,39 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     };
 
+    function processInlineFormatting(value) {
+        const protectedSegments = [];
+        const inlineCodeSegments = [];
+        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>|<[^>]+>)/g, m => {
+            if (m.startsWith('`') && !m.startsWith('```')) {
+                const codeContent = m.slice(1, -1);
+                inlineCodeSegments.push(`<code>${escapeHtml(codeContent)}</code>`);
+                return `${INLINE_CODE_MARKER_PREFIX}${inlineCodeSegments.length - 1}@@`;
+            }
+            protectedSegments.push(m);
+            return `\x00P${protectedSegments.length - 1}\x00`;
+        });
+
+        // Relax emphasis parsing for adjacent CJK text without breaking nested markdown like **`code`**.
+        value = value.replace(/\*\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*\*/g, (_, m) => `${STRONG_OPEN_MARKER}${m.replace(/~/g, '&#126;')}${STRONG_CLOSE_MARKER}`);
+        value = value.replace(/([^\*]|^)\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*([^\*]|$)/g, (_, p, m, s) => `${p}${EM_OPEN_MARKER}${m.replace(/~/g, '&#126;')}${EM_CLOSE_MARKER}${s}`);
+
+        // Prevent single tilde from being parsed as strikethrough (e.g. 1~2, 2~3)
+        value = value.replace(/(?<!~)~(?!~)/g, '&#126;');
+
+        value = value.replace(/\x00P(\d+)\x00/g, (_, i) => protectedSegments[+i]);
+        return { value, inlineCodeSegments };
+    };
+
+    function restoreInlineFormattingMarkers(html, inlineCodeSegments = []) {
+        return html
+            .replaceAll(STRONG_OPEN_MARKER, '<strong>')
+            .replaceAll(STRONG_CLOSE_MARKER, '</strong>')
+            .replaceAll(EM_OPEN_MARKER, '<em>')
+            .replaceAll(EM_CLOSE_MARKER, '</em>')
+            .replace(new RegExp(`${INLINE_CODE_MARKER_PREFIX}(\\d+)@@`, 'g'), (_, i) => inlineCodeSegments[+i] || '');
+    }
+
     const updatePreview = () => {
         if (currentFileType === 'svg') {
             preview.innerHTML = input.value;
@@ -202,21 +240,12 @@ document.addEventListener('DOMContentLoaded', () => {
         // 2. Convert math to <img> before marked sees it
         value = processMath(value);
 
-        // 3. CJK bold/italic fix (math is now <img>, protect HTML and code)
-        const prot = [];
-        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>|<[^>]+>)/g, m => {
-            prot.push(m); return `\x00P${prot.length - 1}\x00`;
-        });
-        value = value.replace(/\*\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*\*/g, (_, m) => `<strong>${m.replace(/~/g, '&#126;')}</strong>`);
-        value = value.replace(/([^\*]|^)\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*([^\*]|$)/g, (_, p, m, s) => `${p}<em>${m.replace(/~/g, '&#126;')}</em>${s}`);
-
-        // Prevent single tilde from being parsed as strikethrough (e.g. 1~2, 2~3)
-        value = value.replace(/(?<!~)~(?!~)/g, '&#126;');
-
-        value = value.replace(/\x00P(\d+)\x00/g, (_, i) => prot[+i]);
+        // 3. CJK bold/italic fix while keeping nested markdown such as **`code`** parseable.
+        const inlineFormatting = processInlineFormatting(value);
+        value = inlineFormatting.value;
 
         // 4. Render markdown
-        preview.innerHTML = marked.parse(value);
+        preview.innerHTML = restoreInlineFormattingMarkers(marked.parse(value), inlineFormatting.inlineCodeSegments);
 
         // 5. Render LaTeX tables
         if (typeof LaTeXTable !== 'undefined') LaTeXTable.renderAll();
