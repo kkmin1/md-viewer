@@ -11,17 +11,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const charCount= document.getElementById('char-count');
     let currentFileName = 'untitled.md';
     let currentFileType = 'markdown';
-    let currentFilePath = null;
-    let currentDocumentBase = new URL(window.location.href);
 
     const UPMATH = 'https://i.upmath.me/svg/';
-    const LATEX_BLOCK_ENV_PATTERN = /\\begin\{(tikzpicture|bmatrix|Bmatrix|pmatrix|vmatrix|Vmatrix|matrix|cases|aligned|align\*?|equation\*?|gather\*?|multline\*?)\}[\s\S]*?\\end\{\1\}/g;
-    const latexMetricCache = {};
-    const STRONG_OPEN_MARKER = '@@MD_STRONG_OPEN@@';
-    const STRONG_CLOSE_MARKER = '@@MD_STRONG_CLOSE@@';
-    const EM_OPEN_MARKER = '@@MD_EM_OPEN@@';
-    const EM_CLOSE_MARKER = '@@MD_EM_CLOSE@@';
-    const INLINE_CODE_MARKER_PREFIX = '@@MD_INLINE_CODE_';
 
     marked.setOptions({ breaks: true, gfm: true, silent: true });
 
@@ -30,37 +21,6 @@ document.addEventListener('DOMContentLoaded', () => {
         .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 
     const isSvgPath = p => typeof p === 'string' && /\.svg(\?.*)?(#.*)?$/i.test(p.trim());
-    const getDesktopApi = () => window.desktopApi && window.desktopApi.isDesktop ? window.desktopApi : null;
-    const toFileUrl = p => {
-        const normalized = String(p || '').replace(/\\/g, '/');
-        const withSlash = normalized.startsWith('/') ? normalized : `/${normalized}`;
-        return new URL(`file://${encodeURI(withSlash)}`);
-    };
-    const getDocumentBase = () => currentDocumentBase || new URL(window.location.href);
-    const resolveAssetUrl = href => {
-        const raw = String(href || '').trim();
-        if (!raw) return raw;
-        if (/^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(raw) || raw.startsWith('//')) return raw;
-        try {
-            return new URL(raw, getDocumentBase()).href;
-        } catch {
-            return raw;
-        }
-    };
-    const updateWindowTitle = () => {
-        document.title = 'Markdown Viewer';
-    };
-    const setCurrentDocument = (doc = {}) => {
-        input.value = typeof doc.content === 'string' ? doc.content : '';
-        currentFileName = doc.name || 'untitled.md';
-        currentFileType = doc.type || 'markdown';
-        currentFilePath = doc.path || null;
-        currentDocumentBase = currentFilePath
-            ? toFileUrl(currentFilePath.replace(/[\\/]+[^\\/]+$/, '/'))
-            : new URL(window.location.href);
-        updateWindowTitle();
-        updatePreview();
-    };
 
     marked.use({
         renderer: {
@@ -70,10 +30,10 @@ document.addEventListener('DOMContentLoaded', () => {
                 const alt  = escapeHtml(tm ? (t.text||'') : (tX||''));
                 const ttl  = (tm ? t.title : tA) ? ` title="${escapeHtml(tm?t.title:tA)}"` : '';
                 if (isSvgPath(href)) {
-                    const abs = escapeHtml(resolveAssetUrl(href));
+                    const abs = escapeHtml(new URL(href, location.href).href);
                     return `<object class="md-svg-object" type="image/svg+xml" data="${abs}" aria-label="${alt}"${ttl}>${alt}</object>`;
                 }
-                return `<img src="${escapeHtml(resolveAssetUrl(href))}" alt="${alt}"${ttl}>`;
+                return `<img src="${escapeHtml(href)}" alt="${alt}"${ttl}>`;
             }
         }
     });
@@ -83,59 +43,18 @@ document.addEventListener('DOMContentLoaded', () => {
         // Inline math: wrap with \textstyle so upmath renders at text size
         const tex = block ? formula : `{\\textstyle ${formula}}`;
         const url = UPMATH + encodeURIComponent(tex);
-        const alt = escapeHtml(formula);
-        const img = `<img src="${url}" alt="${alt}" class="latex-svg" data-latex-source="${alt}" data-latex-display="${block ? 'block' : 'inline'}" style="vertical-align:middle;max-width:100%;opacity:0;">`;
+        const alt = formula.replace(/"/g, '&quot;').replace(/</g, '&lt;');
+        const img = `<img src="${url}" alt="${alt}" class="latex-svg" style="vertical-align:middle;max-width:100%;">`;
         return block
             ? `<div style="text-align:center;margin:1.2em 0">${img}</div>`
             : img;
-    }
-
-    function setLatexMetrics(img, metrics, block) {
-        if (!metrics) return;
-        const { shift, width, height } = metrics;
-        img.style.opacity = '1';
-        img.style.width = `calc(var(--latex-zoom, 1) * ${width}pt)`;
-        img.style.height = `calc(var(--latex-zoom, 1) * ${height}pt)`;
-        img.style.verticalAlign = block ? 'top' : `calc(var(--latex-zoom, 1) * ${-shift}pt)`;
-    }
-
-    async function ensureLatexMetrics(img) {
-        const src = img.getAttribute('src');
-        if (!src) return;
-
-        const block = img.dataset.latexDisplay === 'block';
-        const cached = latexMetricCache[src];
-        if (cached) {
-            setLatexMetrics(img, cached, block);
-            return;
-        }
-
-        try {
-            const resp = await fetch(src);
-            if (!resp.ok) throw new Error('Failed to fetch LaTeX SVG');
-            const text = await resp.text();
-            const match = text.match(/postMessage\((?:&quot;|")([\d|.\-eE]+)(?:&quot;|")/);
-            if (!match || !match[1]) throw new Error('Missing metrics');
-
-            const [shift, width, height] = match[1].split('|');
-            const metrics = { shift, width, height };
-            latexMetricCache[src] = metrics;
-            setLatexMetrics(img, metrics, block);
-        } catch {
-            img.style.opacity = '1';
-        }
-    }
-
-    async function hydrateLatex() {
-        const images = [...preview.querySelectorAll('img.latex-svg')];
-        await Promise.all(images.map(ensureLatexMetrics));
     }
 
     /* Pre-process markdown: replace math delimiters with <img> BEFORE marked */
     function processMath(value) {
         // Protect code blocks and tabular <pre> from math substitution
         const codePh = [];
-        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>|<code[\s\S]*?<\/code>)/g, m => {
+        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>)/g, m => {
             codePh.push(m); return `\x00C${codePh.length - 1}\x00`;
         });
 
@@ -155,11 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
         // 3. Standard Block: $$ ... $$
         value = value.replace(/\$\$([\s\S]*?)\$\$/g, (_, f) => addMath(f, true));
 
-        // 4. Common bare LaTeX environments, including TikZ, rendered as block math.
-        value = value.replace(LATEX_BLOCK_ENV_PATTERN, m => addMath(m, true));
 
-        // 5. Standard Inline: $ ... $ (ignore escaped \$)
-        value = value.replace(/(?<![\\$])\$(?!\$)([^\n$]+?)(?<!\\)\$(?!\$)/g, (_, f) => addMath(f, false));
 
         // Replace math markers with images
         value = value.replace(/\x01M(\d+)\x01/g, (_, i) => {
@@ -190,39 +105,6 @@ document.addEventListener('DOMContentLoaded', () => {
         }));
     };
 
-    function processInlineFormatting(value) {
-        const protectedSegments = [];
-        const inlineCodeSegments = [];
-        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>|<[^>]+>)/g, m => {
-            if (m.startsWith('`') && !m.startsWith('```')) {
-                const codeContent = m.slice(1, -1);
-                inlineCodeSegments.push(`<code>${escapeHtml(codeContent)}</code>`);
-                return `${INLINE_CODE_MARKER_PREFIX}${inlineCodeSegments.length - 1}@@`;
-            }
-            protectedSegments.push(m);
-            return `\x00P${protectedSegments.length - 1}\x00`;
-        });
-
-        // Relax emphasis parsing for adjacent CJK text without breaking nested markdown like **`code`**.
-        value = value.replace(/\*\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*\*/g, (_, m) => `${STRONG_OPEN_MARKER}${m.replace(/~/g, '&#126;')}${STRONG_CLOSE_MARKER}`);
-        value = value.replace(/([^\*]|^)\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*([^\*]|$)/g, (_, p, m, s) => `${p}${EM_OPEN_MARKER}${m.replace(/~/g, '&#126;')}${EM_CLOSE_MARKER}${s}`);
-
-        // Prevent single tilde from being parsed as strikethrough (e.g. 1~2, 2~3)
-        value = value.replace(/(?<!~)~(?!~)/g, '&#126;');
-
-        value = value.replace(/\x00P(\d+)\x00/g, (_, i) => protectedSegments[+i]);
-        return { value, inlineCodeSegments };
-    };
-
-    function restoreInlineFormattingMarkers(html, inlineCodeSegments = []) {
-        return html
-            .replaceAll(STRONG_OPEN_MARKER, '<strong>')
-            .replaceAll(STRONG_CLOSE_MARKER, '</strong>')
-            .replaceAll(EM_OPEN_MARKER, '<em>')
-            .replaceAll(EM_CLOSE_MARKER, '</em>')
-            .replace(new RegExp(`${INLINE_CODE_MARKER_PREFIX}(\\d+)@@`, 'g'), (_, i) => inlineCodeSegments[+i] || '');
-    }
-
     const updatePreview = () => {
         if (currentFileType === 'svg') {
             preview.innerHTML = input.value;
@@ -240,33 +122,36 @@ document.addEventListener('DOMContentLoaded', () => {
         // 2. Convert math to <img> before marked sees it
         value = processMath(value);
 
-        // 3. CJK bold/italic fix while keeping nested markdown such as **`code`** parseable.
-        const inlineFormatting = processInlineFormatting(value);
-        value = inlineFormatting.value;
+        // 3. CJK bold/italic fix (math is now <img>, protect HTML and code)
+        const prot = [];
+        value = value.replace(/(```[\s\S]*?```|`[^`\n]+`|<pre[\s\S]*?<\/pre>|<[^>]+>)/g, m => {
+            prot.push(m); return `\x00P${prot.length - 1}\x00`;
+        });
+        value = value.replace(/\*\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*\*/g, (_, m) => `<strong>${m.replace(/~/g, '&#126;')}</strong>`);
+        value = value.replace(/([^\*]|^)\*([^\*\s](?:[^\*\n]*?[^\*\s])?)\*([^\*]|$)/g, (_, p, m, s) => `${p}<em>${m.replace(/~/g, '&#126;')}</em>${s}`);
+
+        // Prevent single tilde from being parsed as strikethrough (e.g. 1~2, 2~3)
+        value = value.replace(/(?<!~)~(?!~)/g, '&#126;');
+
+        value = value.replace(/\x00P(\d+)\x00/g, (_, i) => prot[+i]);
 
         // 4. Render markdown
-        preview.innerHTML = restoreInlineFormattingMarkers(marked.parse(value), inlineFormatting.inlineCodeSegments);
+        preview.innerHTML = marked.parse(value);
 
         // 5. Render LaTeX tables
         if (typeof LaTeXTable !== 'undefined') LaTeXTable.renderAll();
 
-        // 6. Apply the same sizing/baseline adjustment that latex.js provided.
-        hydrateLatex();
-
-        // 7. Hydrate local SVG images
+        // 6. Hydrate local SVG images
         hydrateSvg();
 
-        // 8. Syntax highlighting
+        // 7. Syntax highlighting
         if (typeof hljs !== 'undefined')
             preview.querySelectorAll('pre code').forEach(b => hljs.highlightElement(b));
 
         const txt = input.value.trim();
         wordCount.textContent = txt ? txt.split(/\s+/).length : 0;
         charCount.textContent = input.value.length;
-        setTimeout(() => { }, 1000);
     };
-
-
 
     const readFile = f => new Promise((res, rej) => {
         const r = new FileReader();
@@ -278,25 +163,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const saveFile = async () => {
         const content = input.value;
-        const desktopApi = getDesktopApi();
-        const name = currentFileType === 'svg'
-            ? (currentFileName.endsWith('.svg') ? currentFileName : `${currentFileName}.svg`)
-            : (currentFileName.endsWith('.md') ? currentFileName : `${currentFileName}.md`);
+        const name = currentFileName.endsWith('.md') ? currentFileName : `${currentFileName}.md`;
         try {
-            if (desktopApi) {
-                const saved = await desktopApi.saveFile({
-                    content,
-                    currentPath: currentFilePath,
-                    currentType: currentFileType
-                });
-                if (saved?.path) {
-                    currentFilePath = saved.path;
-                    currentFileName = saved.name || name;
-                    currentDocumentBase = toFileUrl(saved.path.replace(/[\\/]+[^\\/]+$/, '/'));
-                    updateWindowTitle();
-                }
-                return;
-            }
             if ('showSaveFilePicker' in window) {
                 const h = await window.showSaveFilePicker({ suggestedName: name,
                     types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }] });
@@ -309,10 +177,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 download: name
             });
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
-
         } catch (e) {
             if (e?.name === 'AbortError') { return; }
-
         }
     };
 
@@ -327,8 +193,30 @@ document.addEventListener('DOMContentLoaded', () => {
         }).catch(() => navigator.clipboard.writeText(preview.innerText));
     };
 
-    updateWindowTitle();
-    updatePreview();
+    const loadTestMd = async () => {
+        try {
+            if (location.protocol === 'file:') {
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', 'test.md', false);
+                xhr.send(null);
+                if (xhr.status === 200 || xhr.status === 0) {
+                    input.value = xhr.responseText;
+                    currentFileName = 'test.md';
+                    updatePreview();
+                }
+            } else {
+                const response = await fetch('test.md');
+                if (response.ok) {
+                    input.value = await response.text();
+                    currentFileName = 'test.md';
+                    updatePreview();
+                }
+            }
+        } catch (err) {}
+    };
+
+    loadTestMd();
+
     input.addEventListener('input', () => { updatePreview(); });
     clearBtn?.addEventListener('click', () => {
         if (confirm('모든 내용을 지우시겠습니까?')) {
@@ -336,24 +224,14 @@ document.addEventListener('DOMContentLoaded', () => {
             updatePreview();
         }
     });
-    openBtn?.addEventListener('click', async () => {
-        const desktopApi = getDesktopApi();
-        if (desktopApi) {
-            const doc = await desktopApi.openFile();
-            if (doc) setCurrentDocument(doc);
-            return;
-        }
-        fileInput.click();
-    });
+    openBtn?.addEventListener('click', () => fileInput.click());
     fileInput?.addEventListener('change', async e => {
         const [f] = e.target.files || []; if (!f) return;
         try {
             const txt = await readFile(f);
-            setCurrentDocument({
-                content: txt,
-                name: f.name || 'untitled.md',
-                type: isSvgFile(f) ? 'svg' : 'markdown'
-            });
+            input.value = txt; currentFileName = f.name || 'untitled.md';
+            currentFileType = isSvgFile(f) ? 'svg' : 'markdown';
+            updatePreview();
         } catch { } finally { fileInput.value = ''; }
     });
     saveBtn?.addEventListener('click', saveFile);
@@ -385,14 +263,4 @@ document.addEventListener('DOMContentLoaded', () => {
             updatePreview();
         }
     });
-
-    const desktopApi = getDesktopApi();
-    if (desktopApi) {
-        desktopApi.getLaunchFile().then(doc => {
-            if (doc) setCurrentDocument(doc);
-        }).catch(() => {});
-        desktopApi.onOpenFile(doc => {
-            if (doc) setCurrentDocument(doc);
-        });
-    }
 });
