@@ -242,6 +242,16 @@ textarea {
     margin-bottom: 1.2rem;
 }
 
+.markdown-body img,
+.markdown-body .md-svg-object,
+.markdown-body object[type="image/svg+xml"] {
+    display: block;
+    max-width: min(100%, 720px);
+    width: auto;
+    height: auto;
+    margin: 1rem auto;
+}
+
 .markdown-body h1 {
     font-size: 2.2rem;
     margin-top: 1.2rem;
