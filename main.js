@@ -52,6 +52,57 @@ async function createWindow() {
     await mainWindow.loadFile(path.join(__dirname, 'index.html'));
 }
 
+function buildPdfHtml({ html, title }) {
+    const safeTitle = String(title || 'Document')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+
+    return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>${safeTitle}</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            color: #222;
+            margin: 24px 32px;
+            line-height: 1.6;
+        }
+        img, object {
+            max-width: 100%;
+            height: auto;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            border: 1px solid #ddd;
+            padding: 12px;
+            border-radius: 8px;
+            background: #f8f8f8;
+        }
+        code {
+            font-family: Consolas, monospace;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="markdown-body">${html || ''}</div>
+</body>
+</html>`;
+}
+
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
 if (!gotSingleInstanceLock) {
@@ -120,6 +171,41 @@ ipcMain.handle('dialog:save-file', async (_event, payload) => {
         path: targetPath,
         name: path.basename(targetPath)
     };
+});
+
+ipcMain.handle('dialog:save-pdf', async (_event, payload) => {
+    const { html, title } = payload || {};
+    if (typeof html !== 'string' || !html.trim()) return null;
+
+    const result = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: `${(title || 'document').replace(/\.[^.]+$/, '')}.pdf`,
+        filters: [{ name: 'PDF', extensions: ['pdf'] }]
+    });
+    if (result.canceled || !result.filePath) return null;
+
+    const pdfWindow = new BrowserWindow({
+        show: false,
+        webPreferences: {
+            sandbox: true,
+            contextIsolation: true
+        }
+    });
+
+    try {
+        await pdfWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(buildPdfHtml({ html, title }))}`);
+        const pdfBuffer = await pdfWindow.webContents.printToPDF({
+            printBackground: true,
+            landscape: false,
+            pageSize: 'A4'
+        });
+        await fs.writeFile(result.filePath, pdfBuffer);
+        return {
+            path: result.filePath,
+            name: path.basename(result.filePath)
+        };
+    } finally {
+        if (!pdfWindow.isDestroyed()) pdfWindow.close();
+    }
 });
 
 ipcMain.handle('app:get-launch-file', async () => {

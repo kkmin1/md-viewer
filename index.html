@@ -21,7 +21,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
     <script src="latex.js"></script>
     <script src="LatexTable.js"></script>
-    <script src="script.js?v=6"></script>
+    <script src="script.js?v=7"></script>
 
 
 
@@ -34,15 +34,22 @@
                 <span class="gradient-text">Markdown</span> Editor
             </div>
             <div class="actions">
-                <button id="open-btn" class="secondary-btn" title="불러오기">
-                    불러오기
+                <button id="open-file-btn" class="secondary-btn" title="파일 불러오기">
+                    파일 선택
+                </button>
+                <button id="open-folder-btn" class="secondary-btn" title="폴더 불러오기">
+                    폴더 선택
                 </button>
                 <button id="save-btn" title="저장하기">
                     저장하기
                 </button>
             </div>
         </header>
+        <div class="open-hint">
+            먼저 `파일 선택`으로 문서를 열고, 이미지가 안 보이면 `폴더 선택`으로 해당 문서의 이미지 폴더를 연결하세요.
+        </div>
         <input type="file" id="file-input" accept=".md,.svg,text/markdown,text/plain,image/svg+xml" hidden>
+        <input type="file" id="dir-input" webkitdirectory directory multiple hidden>
 
         <main>
             <section class="editor-pane">

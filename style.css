@@ -48,6 +48,12 @@ header {
     z-index: 10;
 }
 
+.open-hint {
+    padding: 0.65rem 2rem 0;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+
 .logo {
     font-size: 1.25rem;
     font-weight: 600;

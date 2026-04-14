@@ -2,16 +2,21 @@ document.addEventListener('DOMContentLoaded', () => {
     const input = document.getElementById('markdown-input');
     const preview = document.getElementById('keep-preview');
     const copyBtn = document.getElementById('copy-btn');
-    const openBtn = document.getElementById('open-btn');
+    const openFileBtn = document.getElementById('open-file-btn');
+    const openFolderBtn = document.getElementById('open-folder-btn');
     const saveBtn = document.getElementById('save-btn');
     const clearBtn = document.getElementById('clear-btn');
     const fileInput = document.getElementById('file-input');
+    const dirInput = document.getElementById('dir-input');
 
     const wordCount = document.getElementById('word-count');
     const charCount = document.getElementById('char-count');
     let currentFileName = 'untitled.md';
     let currentFileType = 'markdown';
     let currentFilePath = null;
+    let hasDocumentApi = false;
+    let currentWorkspaceFiles = new Map();
+    const assetObjectUrls = new Map();
 
     const isDesktop = !!window.desktopApi;
     const UPMATH = 'https://i.upmath.me/svg/';
@@ -26,6 +31,57 @@ document.addEventListener('DOMContentLoaded', () => {
     const hasUrlScheme = value => /^[a-z][a-z0-9+.-]*:/i.test(value);
     const isWindowsAbsolutePath = value => /^[a-z]:[\\/]/i.test(value);
     const isUncPath = value => /^\\\\/.test(value);
+    const isWebDocumentPath = value => !isDesktop && hasDocumentApi && typeof value === 'string' && value.includes(':\\');
+    const normalizeRelPath = value => String(value ?? '').replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+
+    function revokeAssetObjectUrls() {
+        for (const url of assetObjectUrls.values()) {
+            URL.revokeObjectURL(url);
+        }
+        assetObjectUrls.clear();
+    }
+
+    function normalizeSegments(value) {
+        const parts = normalizeRelPath(value).split('/');
+        const stack = [];
+        for (const part of parts) {
+            if (!part || part === '.') continue;
+            if (part === '..') {
+                if (stack.length) stack.pop();
+                continue;
+            }
+            stack.push(part);
+        }
+        return stack.join('/');
+    }
+
+    function getCurrentDocumentDir() {
+        if (typeof currentFilePath === 'string' && currentFilePath.trim()) {
+            if (hasUrlScheme(currentFilePath) || isWindowsAbsolutePath(currentFilePath) || isUncPath(currentFilePath)) {
+                return currentFilePath.replace(/\\/g, '/').replace(/\/[^/]*$/, '/');
+            }
+        }
+        if (currentFileName.includes('/')) {
+            return currentFileName.replace(/\/[^/]*$/, '/');
+        }
+        return '';
+    }
+
+    function resolveWorkspaceAsset(rawPath) {
+        if (!currentWorkspaceFiles.size) return null;
+        const normalized = normalizeRelPath(rawPath);
+        if (!normalized) return null;
+        const docDir = getCurrentDocumentDir();
+        const combined = normalizeSegments(docDir ? `${docDir}/${normalized}` : normalized);
+        const file = currentWorkspaceFiles.get(combined);
+        if (!file) return null;
+        let objectUrl = assetObjectUrls.get(combined);
+        if (!objectUrl) {
+            objectUrl = URL.createObjectURL(file);
+            assetObjectUrls.set(combined, objectUrl);
+        }
+        return objectUrl;
+    }
 
     function toFileHref(filePath) {
         if (typeof filePath !== 'string' || !filePath.trim()) return null;
@@ -53,6 +109,11 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!value) return '';
         if (value.startsWith('#') || value.startsWith('data:') || value.startsWith('blob:')) return value;
         if (hasUrlScheme(value)) return value;
+        const workspaceAsset = resolveWorkspaceAsset(value);
+        if (workspaceAsset) return workspaceAsset;
+        if (isWebDocumentPath(currentFilePath)) {
+            return `/api/asset?doc=${encodeURIComponent(currentFilePath)}&src=${encodeURIComponent(value)}`;
+        }
         if (isWindowsAbsolutePath(value) || isUncPath(value)) {
             return toFileHref(value) || value;
         }
@@ -188,14 +249,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const isSvgFile = f => f.type === 'image/svg+xml' || (f.name || '').toLowerCase().endsWith('.svg');
 
-    const saveFile = async () => {
+    const saveSourceFile = async () => {
         const content = input.value;
-        const name = currentFileName.endsWith('.md') ? currentFileName : `${currentFileName}.md`;
+        const isSvg = currentFileType === 'svg';
+        const defaultExt = isSvg ? '.svg' : '.md';
+        const defaultType = isSvg ? 'image/svg+xml' : 'text/markdown';
+        const baseName = currentFileName || `untitled${defaultExt}`;
+        const name = baseName.toLowerCase().endsWith(defaultExt) ? baseName : `${baseName}${defaultExt}`;
         try {
             if ('showSaveFilePicker' in window) {
                 const h = await window.showSaveFilePicker({
                     suggestedName: name,
-                    types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }]
+                    excludeAcceptAllOption: false,
+                    types: [{
+                        description: isSvg ? 'SVG' : 'Markdown',
+                        accept: { [defaultType]: [defaultExt] }
+                    }]
                 });
                 const w = await h.createWritable();
                 await w.write(content);
@@ -204,7 +273,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 return;
             }
             const a = Object.assign(document.createElement('a'), {
-                href: URL.createObjectURL(new Blob([content], { type: 'text/markdown;charset=utf-8' })),
+                href: URL.createObjectURL(new Blob([content], { type: `${defaultType};charset=utf-8` })),
                 download: name
             });
             document.body.appendChild(a);
@@ -213,6 +282,122 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             if (e?.name === 'AbortError') return;
         }
+    };
+
+    const promptSaveFormat = () => {
+        const defaultFormat = currentFileType === 'svg' ? 'svg' : 'md';
+        const answer = prompt(
+            `저장 형식을 입력하세요.\n- ${defaultFormat}: 원본 파일 저장\n- pdf: PDF 저장`,
+            defaultFormat
+        );
+        if (answer === null) return null;
+        const normalized = answer.trim().toLowerCase();
+        if (!normalized) return defaultFormat;
+        if (normalized === 'pdf') return 'pdf';
+        return defaultFormat;
+    };
+
+    const buildPrintHtml = () => {
+        const title = escapeHtml((currentFileName || 'document').replace(/\.[^.]+$/, ''));
+        return `<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>${title}</title>
+    <style>
+        body {
+            font-family: "Segoe UI", Arial, sans-serif;
+            color: #222;
+            margin: 24px 32px;
+            line-height: 1.6;
+        }
+        img, object {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            margin: 1rem auto;
+        }
+        pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            border: 1px solid #ddd;
+            padding: 12px;
+            border-radius: 8px;
+            background: #f8f8f8;
+        }
+        code {
+            font-family: Consolas, monospace;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border: 1px solid #ccc;
+            padding: 8px 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="markdown-body">${preview.innerHTML}</div>
+</body>
+</html>`;
+    };
+
+    const savePdfInBrowser = () => {
+        const frame = document.createElement('iframe');
+        frame.style.position = 'fixed';
+        frame.style.right = '0';
+        frame.style.bottom = '0';
+        frame.style.width = '0';
+        frame.style.height = '0';
+        frame.style.border = '0';
+        frame.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(frame);
+
+        const cleanup = () => {
+            window.removeEventListener('afterprint', cleanup);
+            frame.remove();
+        };
+
+        window.addEventListener('afterprint', cleanup, { once: true });
+
+        const doc = frame.contentWindow?.document;
+        if (!doc || !frame.contentWindow) {
+            cleanup();
+            alert('PDF 저장용 인쇄 프레임을 만들지 못했습니다.');
+            return;
+        }
+
+        doc.open();
+        doc.write(buildPrintHtml());
+        doc.close();
+
+        frame.onload = () => {
+            frame.contentWindow.focus();
+            frame.contentWindow.print();
+        };
+    };
+
+    const savePdf = async () => {
+        if (isDesktop && window.desktopApi?.savePdf) {
+            await window.desktopApi.savePdf({
+                html: preview.innerHTML,
+                title: currentFileName || 'document'
+            });
+            return;
+        }
+        savePdfInBrowser();
+    };
+
+    const handleSave = async () => {
+        const format = promptSaveFormat();
+        if (!format) return;
+        if (format === 'pdf') {
+            await savePdf();
+            return;
+        }
+        await saveSourceFile();
     };
 
     const copyTo = btn => {
@@ -233,11 +418,21 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const loadDocument = doc => {
         if (!doc) return;
+        if (doc.path) {
+            revokeAssetObjectUrls();
+            currentWorkspaceFiles = new Map();
+        }
         input.value = doc.content || '';
         currentFileName = doc.name || 'untitled.md';
         currentFilePath = doc.path || null;
         currentFileType = doc.type || 'markdown';
         updatePreview();
+    };
+
+    const loadDocumentFromServerPath = async filePath => {
+        const response = await fetch(`/api/document?path=${encodeURIComponent(filePath)}`);
+        if (!response.ok) throw new Error(`Failed to load ${filePath}`);
+        loadDocument(await response.json());
     };
 
     const loadDocumentFromUrl = async fileUrl => {
@@ -250,6 +445,82 @@ document.addEventListener('DOMContentLoaded', () => {
             path: absoluteUrl,
             type: /\.svg(\?.*)?(#.*)?$/i.test(absoluteUrl) ? 'svg' : 'markdown'
         });
+    };
+
+    async function collectDirectoryFiles(dirHandle, basePath = '') {
+        const files = [];
+        for await (const entry of dirHandle.values()) {
+            const nextPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+            if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                files.push({ path: nextPath, file });
+                continue;
+            }
+            if (entry.kind === 'directory') {
+                files.push(...await collectDirectoryFiles(entry, nextPath));
+            }
+        }
+        return files;
+    }
+
+    async function loadWorkspaceEntries(entries) {
+        if (!entries.length) {
+            alert('선택한 폴더에 파일이 없습니다.');
+            return;
+        }
+
+        revokeAssetObjectUrls();
+        currentWorkspaceFiles = new Map(entries.map(({ path, file }) => [normalizeRelPath(path), file]));
+
+        if (!input.value.trim()) {
+            alert('먼저 `파일 선택`으로 Markdown 문서를 연 뒤, 필요하면 `폴더 선택`으로 이미지 폴더를 연결하세요.');
+            return;
+        }
+
+        updatePreview();
+    }
+
+    async function openFolderWorkspace() {
+        if ('showDirectoryPicker' in window) {
+            try {
+                const dirHandle = await window.showDirectoryPicker({ mode: 'read' });
+                const entries = await collectDirectoryFiles(dirHandle);
+                await loadWorkspaceEntries(entries);
+                return;
+            } catch (error) {
+                if (error?.name === 'AbortError') return;
+                console.error(error);
+            }
+        }
+        dirInput?.click();
+    }
+
+    const detectDocumentApi = async () => {
+        try {
+            const response = await fetch('/api/document?path=__codex_probe__', { method: 'GET' });
+            return response.status !== 404;
+        } catch {
+            return false;
+        }
+    };
+
+    const promptAndLoadWebDocument = async () => {
+        const message = hasDocumentApi
+            ? '열 Markdown 경로를 입력하세요.\n예: /converter/glm.md 또는 C:\\Users\\kkmin\\.gemini\\antigravity\\scratch\\converter\\glm.md'
+            : '열 Markdown URL/경로를 입력하세요.\n예: ./docs/readme.md 또는 /my-repo/docs/readme.md';
+        const defaultValue = currentFilePath || (hasDocumentApi ? '/converter/glm.md' : './test.md');
+        const answer = prompt(message, defaultValue);
+        if (!answer) return;
+        try {
+            if (hasDocumentApi) await loadDocumentFromServerPath(answer);
+            else await loadDocumentFromUrl(answer);
+            const url = new URL(location.href);
+            url.searchParams.set('file', answer);
+            history.replaceState({}, '', url);
+        } catch (error) {
+            console.error(error);
+            alert('문서를 열지 못했습니다. 경로를 다시 확인해주세요.');
+        }
     };
 
     const loadTestMd = async () => {
@@ -271,10 +542,12 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const initWeb = async () => {
+        hasDocumentApi = await detectDocumentApi();
         const fileParam = new URLSearchParams(location.search).get('file');
         if (fileParam) {
             try {
-                await loadDocumentFromUrl(fileParam);
+                if (hasDocumentApi) await loadDocumentFromServerPath(fileParam);
+                else await loadDocumentFromUrl(fileParam);
                 return;
             } catch (error) {
                 console.error(error);
@@ -295,8 +568,14 @@ document.addEventListener('DOMContentLoaded', () => {
             await loadTestMd();
         }
 
-        saveBtn.removeEventListener('click', saveFile);
+        saveBtn.removeEventListener('click', handleSave);
         saveBtn.addEventListener('click', async () => {
+            const format = promptSaveFormat();
+            if (!format) return;
+            if (format === 'pdf') {
+                await savePdf();
+                return;
+            }
             const result = await window.desktopApi.saveFile({
                 content: input.value,
                 currentPath: currentFilePath,
@@ -308,12 +587,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        openBtn.removeEventListener('click', () => fileInput.click());
-        openBtn.addEventListener('click', async e => {
+        openFileBtn.removeEventListener('click', () => fileInput.click());
+        openFileBtn.addEventListener('click', async e => {
             e.stopImmediatePropagation();
             const doc = await window.desktopApi.openFile();
             if (doc) loadDocument(doc);
         });
+        if (openFolderBtn) openFolderBtn.style.display = 'none';
     };
 
     if (isDesktop) {
@@ -329,8 +609,28 @@ document.addEventListener('DOMContentLoaded', () => {
             updatePreview();
         }
     });
-    openBtn?.addEventListener('click', () => {
-        if (!isDesktop) fileInput.click();
+    openFileBtn?.addEventListener('click', () => {
+        if (!isDesktop) {
+            if (hasDocumentApi) promptAndLoadWebDocument();
+            else fileInput.click();
+            return;
+        }
+        fileInput.click();
+    });
+    openFolderBtn?.addEventListener('click', () => {
+        if (isDesktop) return;
+        openFolderWorkspace();
+    });
+    dirInput?.addEventListener('change', async e => {
+        const files = Array.from(e.target.files || []).map(file => ({
+            path: normalizeRelPath(file.webkitRelativePath || file.name),
+            file
+        }));
+        try {
+            await loadWorkspaceEntries(files);
+        } finally {
+            dirInput.value = '';
+        }
     });
     fileInput?.addEventListener('change', async e => {
         const [f] = e.target.files || [];
@@ -343,12 +643,12 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
     saveBtn?.addEventListener('click', () => {
-        if (!isDesktop) saveFile();
+        if (!isDesktop) handleSave();
     });
     document.addEventListener('keydown', e => {
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
             e.preventDefault();
-            saveFile();
+            handleSave();
         }
     });
     copyBtn.addEventListener('click', () => copyTo(copyBtn));
